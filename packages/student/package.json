@@ -1,0 +1,42 @@
+{
+  "name": "jupyterlab-google-classroom-student",
+  "packageManager": "yarn@4.9.2",
+  "version": "0.3.9",
+  "description": "Extensão Google Classroom para o JupyterLab Google Classroom (esqueleto de protótipo).",
+  "license": "MIT",
+  "keywords": [
+    "jupyter",
+    "jupyterlab",
+    "jupyterlab-extension"
+  ],
+  "files": [
+    "lib/**/*",
+    "static/**/*"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "google_classroom_student/static"
+  },
+  "scripts": {
+    "build": "yarn build:lib && yarn build:labextension",
+    "build:lib": "tsc -b",
+    "build:labextension": "jupyter labextension build . --development=True",
+    "clean": "yarn clean:lib",
+    "clean:lib": "yarn dlx rimraf lib tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@jupyterlab/application": "^4.5.7",
+    "@jupyterlab/apputils": "^4.6.10",
+    "@jupyterlab/docmanager": "^4.5.7",
+    "@jupyterlab/mainmenu": "^4.5.7",
+    "@jupyterlab/services": "^7.5.10",
+    "@lumino/widgets": "^2.9.0"
+  },
+  "devDependencies": {
+    "@jupyterlab/builder": "4.5.7",
+    "rimraf": "6.0.1",
+    "typescript": "5.7.3"
+  }
+}

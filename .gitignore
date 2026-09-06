@@ -1,0 +1,11 @@
+# Local dependency/build output
+**/node_modules/
+**/.yarn/
+**/lib/
+**/dist/
+**/google_classroom_student/static/
+**/google_classroom_teacher/static/
+**/tsconfig.tsbuildinfo
+*.egg-info/
+__pycache__/
+.pytest_cache/

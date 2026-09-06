@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "google-classroom-teacher"
+version = "0.1.5"
+description = "Integração Google Classroom para professores no JupyterLab Google Classroom"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["jupyter-server>=2.2,<3"]
+
+[project.entry-points."jupyter_server.extension"]
+google_classroom_teacher = "google_classroom_teacher"
+
+[tool.hatch.build.targets.wheel]
+packages = ["google_classroom_teacher"]
+include = ["google_classroom_teacher/**", "google_classroom_teacher/static/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["google_classroom_teacher/**", "src/**", "README.md", "package.json", "tsconfig.json", "pyproject.toml"]

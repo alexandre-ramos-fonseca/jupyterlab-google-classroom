@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "google-classroom-student"
+version = "0.3.9"
+description = "Extensão Google Classroom para o JupyterLab Google Classroom (esqueleto instalável, sem acesso real ao Google)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Alexandre Ramos Fonseca" },
+]
+keywords = [
+    "jupyter",
+    "jupyterlab",
+    "jupyter-server",
+    "classroom",
+    "google-classroom",
+]
+classifiers = [
+    "Framework :: Jupyter",
+    "Framework :: Jupyter :: JupyterLab",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Education",
+]
+dependencies = [
+    "jupyter-server>=2.2,<3",
+]
+
+[project.entry-points."jupyter_server.extension"]
+google_classroom_student = "google_classroom_student"
+
+[tool.hatch.build.targets.wheel]
+packages = ["google_classroom_student"]
+include = [
+    "google_classroom_student/**",
+    "google_classroom_student/static/**",
+]
+exclude = [
+    "google_classroom_student/__pycache__/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "google_classroom_student/**",
+    "src/**",
+    "README.md",
+    "package.json",
+    "tsconfig.json",
+    "pyproject.toml",
+]
+exclude = [
+    "google_classroom_student/__pycache__/**",
+]
