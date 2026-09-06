@@ -1,17 +1,64 @@
 # JupyterLab Google Classroom
 
-This repository contains two independent JupyterLab/Jupyter Server extensions for working with Google Classroom notebooks:
+JupyterLab/Jupyter Server extensions for working with Google Classroom notebook attachments while keeping a local Jupyter workspace in sync with Google Drive.
 
-- `packages/student` — a student workflow that lists the student's Classroom notebook attachments, opens a local copy, and explicitly synchronizes changes with the same Drive file.
-- `packages/teacher` — a teacher workflow that opens a local working copy of a published notebook and synchronizes only a separate Drive copy. The original Classroom attachment is never modified.
+The repository contains two independent components:
 
-The components share no runtime code and are intentionally not merged. Each package contains its TypeScript frontend, Python server extension, tests, and package metadata.
+| Component | Intended user | Behavior |
+| --- | --- | --- |
+| [`packages/student`](packages/student) | Student | Imports the student's Classroom notebook attachment into JupyterLab and explicitly synchronizes changes back to the same Drive file. |
+| [`packages/teacher`](packages/teacher) | Teacher | Opens a local working copy of a published notebook and synchronizes only a separate Drive copy. The original Classroom attachment is never modified. |
 
-## Security and OAuth model
+The components intentionally share no runtime code. Each package contains its own TypeScript frontend, Python Jupyter Server extension, tests, and package metadata.
 
-Google Identity Services uses the OAuth authorization-code-free token flow in the browser. The access token exists only in browser memory: it is not sent to the Jupyter Server and is not written to localStorage, sessionStorage, cookies, files, or a database. Users must authorize again after a page reload, token expiry, or JupyterLab restart. There is no client secret or refresh-token storage.
+## Requirements
 
-Create a Google OAuth web client ID in Google Cloud Console, configure the authorized JavaScript origins for the JupyterLab deployment, and set the public client ID in the server environment:
+- Python 3.9+;
+- JupyterLab 4 / Jupyter Server 2;
+- Node.js 20 recommended for building from source;
+- a Google Workspace for Education account with Google Classroom enabled;
+- a Google Cloud project with the Classroom and Drive APIs enabled and a Web OAuth client configured for the JupyterLab origin.
+
+See [Google Cloud and OAuth setup](docs/google-cloud-setup.md) for the complete Google-side configuration.
+
+## Quick start from source
+
+Clone the repository and create a Python environment with JupyterLab:
+
+```sh
+git clone https://github.com/alexandre-ramos-fonseca/jupyterlab-google-classroom.git
+cd jupyterlab-google-classroom
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip 'jupyterlab>=4.5,<5'
+corepack enable
+```
+
+Build and install the component you need.
+
+### Student
+
+```sh
+cd packages/student
+yarn install --immutable
+yarn build
+python -m pip install -e .
+cd ../..
+```
+
+### Teacher
+
+```sh
+cd packages/teacher
+yarn install --immutable
+yarn build
+python -m pip install -e .
+cd ../..
+```
+
+Both components may be installed in the same Jupyter environment.
+
+Configure the Google OAuth client ID before starting JupyterLab:
 
 ```sh
 export GOOGLE_CLASSROOM_GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
@@ -23,28 +70,79 @@ The teacher component additionally requires a deployment-defined term label:
 export GOOGLE_CLASSROOM_TEACHER_TERM="2026-2"
 ```
 
-The student scopes are `classroom.courses.readonly`, `classroom.student-submissions.me.readonly`, and `drive`, plus optional `classroom.coursework.me` for activity titles. The teacher scopes are `classroom.courses.readonly`, `classroom.coursework.students.readonly`, and `drive.file`. The extensions perform read/list operations and Drive notebook content operations only; they do not submit work or create/edit/delete Classroom coursework.
+Then start JupyterLab:
 
-## Requirements and installation
+```sh
+jupyter lab
+```
 
-Requires Python 3.9+, JupyterLab 4, Jupyter Server 2, Node.js, and a Google OAuth web client configured for the deployment. Install either component from its directory:
+Useful installation checks:
+
+```sh
+jupyter server extension list
+jupyter labextension list
+```
+
+## Google OAuth model
+
+Google Identity Services uses the browser token flow. The access token exists only in browser memory: it is not sent to the Jupyter Server and is not written to localStorage, sessionStorage, cookies, files, or a database. Users must authorize again after a page reload, token expiry, or JupyterLab restart. There is no client secret or refresh-token storage.
+
+The student component requests `classroom.courses.readonly`, `classroom.student-submissions.me.readonly`, and `drive`, plus optional `classroom.coursework.me` for activity titles.
+
+The teacher component requests `classroom.courses.readonly`, `classroom.coursework.students.readonly`, and `drive.file`.
+
+The extensions perform Classroom read/list operations and Drive notebook content operations only. They do not submit student work or create/edit/delete Classroom coursework.
+
+## Student workflow
+
+1. Authorize the Google account in the extension.
+2. Select a Classroom notebook attachment.
+3. The notebook is imported once into the Jupyter workspace; later opens reuse the stored association.
+4. Edit normally in JupyterLab.
+5. Use **Synchronize with Drive** explicitly when you want to update the associated Drive file.
+
+If both the local file and Drive file changed since the stored baseline, synchronization stops and requires the user to choose which version to keep. Backups are made before destructive replacement.
+
+See [`packages/student/README.md`](packages/student/README.md) for component details.
+
+## Teacher workflow
+
+1. Authorize the Google account in the extension.
+2. Select a published Classroom notebook attachment.
+3. Open its local working copy.
+4. On the first synchronization, the extension creates a separate Drive copy.
+5. All later uploads target that copy.
+
+The original Classroom attachment is explicitly protected and is never an upload target.
+
+See [`packages/teacher/README.md`](packages/teacher/README.md) for component details.
+
+## Safeguards and limitations
+
+- local notebook writes and association metadata use restrictive permissions and atomic updates;
+- existing local imports are not silently overwritten;
+- synchronization uses stored Drive baselines and stops on conflicts;
+- backups are created before destructive replacement;
+- there is no automatic merge or background synchronization;
+- there is no automatic Classroom submission;
+- there is no refresh-token persistence;
+- multi-account operation within one loaded JupyterLab page is not supported.
+
+## Development and tests
+
+Each component is built and tested independently:
 
 ```sh
 cd packages/student   # or packages/teacher
 corepack enable
-yarn install
-python -m pip install -e .
+yarn install --immutable
+yarn build
+python -m unittest discover -s tests -v
 ```
 
-For development, run `yarn build` and `python -m unittest discover -s tests -v`. The build produces the JupyterLab prebuilt assets inside the Python package. This repository does not publish to npm or PyPI.
+CI runs the TypeScript/JupyterLab build, Python tests, and wheel build for both components.
 
-## Safeguards and limitations
-
-Local notebook writes and association metadata use restrictive permissions and atomic updates. Existing local imports are not silently overwritten. Synchronization checks the stored Drive baseline and stops for conflicts; the user must choose which version to keep, with backups made before destructive replacement. There is no automatic merge, background synchronization, multi-account support, or automatic Classroom submission.
-
-The teacher flow copies the original Drive file before its first upload and rejects any upload whose target is the original file. The original attachment therefore remains read-only from this extension.
-
-See the component READMEs for endpoint details and workflow-specific behavior.
+The repository does not currently publish packages to npm or PyPI; installation is from source.
 
 ## License
 
