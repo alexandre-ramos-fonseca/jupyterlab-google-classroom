@@ -152,7 +152,12 @@ def update_association(root: Path, key: str, update: dict[str, Any], *, term: st
     if target == source:
         raise ValueError("sourceFileId não pode ser targetFileId")
     if current.get("target_file_id") and target != current["target_file_id"]:
-        raise ValueError("targetFileId não pode ser substituído")
+        if not update.get("replace_missing_target") or update.get("expected_target_file_id") != current["target_file_id"]:
+            raise ValueError("targetFileId não pode ser substituído sem recuperação explícita de destino ausente")
+        if not isinstance(target, str) or not target:
+            raise ValueError("novo targetFileId inválido")
+        if target == current["target_file_id"]:
+            raise ValueError("o novo targetFileId deve ser distinto do destino ausente")
     if "course_section" in update:
         section = sanitize_course_section(update["course_section"], current["course_id"])
         update = {**update, "course_section": section}

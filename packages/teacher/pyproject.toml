@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "google-classroom-teacher"
-version = "0.1.5"
+version = "0.1.6"
 description = "Integração Google Classroom para professores no JupyterLab Google Classroom"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,4 +19,4 @@ packages = ["google_classroom_teacher"]
 include = ["google_classroom_teacher/**", "google_classroom_teacher/static/**"]
 
 [tool.hatch.build.targets.sdist]
-include = ["google_classroom_teacher/**", "src/**", "README.md", "package.json", "tsconfig.json", "pyproject.toml"]
+include = ["google_classroom_teacher/**", "src/**", "README.md", "CHANGELOG.md", "package.json", "tsconfig.json", "pyproject.toml"]

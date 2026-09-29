@@ -100,6 +100,17 @@ class TestAssociations(unittest.TestCase):
         with self.assertRaises(ValueError): storage.update_association(self.root, key, {"target_file_id": "target2"})
         with self.assertRaises(ValueError): storage.update_association(self.root, key, {"target_file_id": "src1"})
 
+    def test_reset_explicitamente_confirmado_exige_target_anterior_e_novo_distinto(self):
+        saved = storage.save_notebook(self.root, record(), notebook())
+        key = saved["association"]["association_key"]
+        storage.update_association(self.root, key, {"target_file_id": "old-target"})
+        with self.assertRaises(ValueError):
+            storage.update_association(self.root, key, {"target_file_id": "new-target", "replace_missing_target": True, "expected_target_file_id": "wrong-target"})
+        updated = storage.update_association(self.root, key, {"target_file_id": "new-target", "replace_missing_target": True, "expected_target_file_id": "old-target"})
+        self.assertEqual(updated["target_file_id"], "new-target")
+        with self.assertRaises(ValueError):
+            storage.update_association(self.root, key, {"target_file_id": "src1", "replace_missing_target": True, "expected_target_file_id": "new-target"})
+
     def test_associacao_legada_sem_section_continua_legivel(self):
         saved = storage.save_notebook(self.root, record(), notebook())
         key = saved["association"]["association_key"]
@@ -212,3 +223,30 @@ class TestTeacherContract(unittest.TestCase):
         self.assertIn("Google Classroom — Professor", source)
         self.assertNotIn("localStorage", source)
         self.assertNotIn("sessionStorage", source)
+
+    def test_frontend_conflict_and_missing_target_resolution_contract(self):
+        source = (Path(__file__).parents[1] / "src" / "index.ts").read_text()
+        conflict = source.split("async function resolveTargetConflict", 1)[1].split("async function recreateMissingTarget", 1)[0]
+        self.assertIn("Usar versão do Jupyter", conflict)
+        self.assertIn("Usar versão do Google Drive", conflict)
+        self.assertIn("Cancelar", conflict)
+        self.assertIn("saveBackup(app, file.localPath, remote, 'drive')", conflict)
+        self.assertIn("saveBackup(app, file.localPath, conflict.localNotebook, 'jupyter')", conflict)
+        self.assertIn("changed(conflict.current, latest)", conflict)
+        self.assertIn("replaceLocalNotebook", conflict)
+        missing = source.split("async function recreateMissingTarget", 1)[1].split("async function synchronize", 1)[0]
+        self.assertIn("Criar nova cópia", missing)
+        self.assertIn("expected_target_file_id: oldTargetId", missing)
+        self.assertIn("replace_missing_target: true", missing)
+        self.assertIn("metadata(token, oldTargetId)", missing)
+        self.assertIn("target_file_id: copied.id", missing)
+        self.assertIn("sourceFileId === targetFileId", source)
+        self.assertIn("?uploadType=media", source)
+        self.assertIn("method: 'PATCH'", source)
+        copy = source.split("async function copySourceFile", 1)[1].split("/** Única função de upload", 1)[0]
+        upload = source.split("export async function uploadTargetContent", 1)[1].split("async function downloadTargetNotebook", 1)[0]
+        self.assertIn("method: 'POST'", copy)
+        self.assertIn("/copy?", copy)
+        self.assertIn("encodeURIComponent(targetFileId)", upload)
+        self.assertNotIn("encodeURIComponent(sourceFileId)}?uploadType=media", upload)
+        self.assertIn("file.baseline = { modifiedTime: association.modified_time", source)

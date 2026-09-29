@@ -1,5 +1,5 @@
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
-import { ICommandPalette } from '@jupyterlab/apputils';
+import { Dialog, ICommandPalette, showDialog } from '@jupyterlab/apputils';
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import { IMainMenu } from '@jupyterlab/mainmenu';
 import { ServerConnection } from '@jupyterlab/services';
@@ -63,6 +63,16 @@ interface TeacherAssociation {
   coursework_title: string; source_file_id: string; source_file_name: string; local_path: string;
   target_file_id: string | null; target_file_name: string | null;
   modified_time: string | null; version: string | null; md5_checksum: string | null; can_edit: boolean | null;
+}
+
+class TargetConflictError extends Error {
+  constructor(readonly current: DriveMetadata, readonly localNotebook: any) {
+    super('O arquivo de destino no Drive foi alterado desde a última sincronização.');
+  }
+}
+
+class MissingTargetError extends Error {
+  constructor(readonly targetId: string, readonly localNotebook: any) { super('A cópia de destino não existe mais no Google Drive.'); }
 }
 
 export function associationIdentity(courseId: string, courseworkId: string, sourceFileId: string): string {
@@ -168,8 +178,9 @@ function googleError(operation: string, status: number): Error {
   console.warn('classroom-teacher: falha Google', { operation, status });
   if (status === 401) return new Error('Autorização expirada. Conecte-se novamente.');
   if (status === 403) return new Error(`Permissão insuficiente ao consultar ${operation}.`);
-  if (status === 404) return new Error(`Recurso não encontrado ao consultar ${operation}.`);
-  return new Error(`Falha HTTP ${status} ao consultar ${operation}.`);
+  const error = new Error(status === 404 ? `Recurso não encontrado ao consultar ${operation}.` : `Falha HTTP ${status} ao consultar ${operation}.`);
+  (error as any).status = status;
+  return error;
 }
 
 async function googleGet(token: string, url: string, operation: string): Promise<any> {
@@ -308,12 +319,87 @@ async function openSource(app: JupyterFrontEnd, token: string, file: TeacherFile
   return saved.association;
 }
 
+async function downloadTargetNotebook(token: string, targetId: string): Promise<any> {
+  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(targetId)}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw googleError('download da cópia no Drive', response.status);
+  return validateNotebook(await response.json());
+}
+
+async function saveBackup(app: JupyterFrontEnd, localPath: string, notebook: any, origin: 'drive' | 'jupyter'): Promise<void> {
+  const base = `classroom/${(localPath.split('/').pop() || 'notebook.ipynb').replace(/\.ipynb$/i, '')}--backup-${origin}--${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}.ipynb`;
+  let path = base, suffix = 2;
+  while (true) {
+    try { await app.serviceManager.contents.get(path, { content: false }); path = base.replace(/\.ipynb$/, ` (${suffix++}).ipynb`); }
+    catch (_) { break; }
+  }
+  await app.serviceManager.contents.save(path, { type: 'notebook', format: 'json', content: notebook });
+}
+
+async function replaceLocalNotebook(app: JupyterFrontEnd, documentManager: IDocumentManager, path: string, notebook: any): Promise<void> {
+  await app.serviceManager.contents.save(path, { type: 'notebook', format: 'json', content: notebook });
+  const widget = documentManager.findWidget(path);
+  if (widget) {
+    const context = documentManager.contextForWidget(widget);
+    if (!context) throw new Error('Não foi possível recarregar o notebook local.');
+    await context.revert();
+  }
+}
+
+async function resolveTargetConflict(app: JupyterFrontEnd, documentManager: IDocumentManager, token: string, file: TeacherFile, association: TeacherAssociation, conflict: TargetConflictError): Promise<TeacherAssociation | null> {
+  const choice = await showDialog({ title: 'Conflito de versões', body: 'O notebook foi alterado no Jupyter e na cópia do Google Drive. Escolha qual versão preservar. A versão descartada será salva como backup local.', buttons: [
+    Dialog.okButton({ label: 'Usar versão do Jupyter' }), Dialog.warnButton({ label: 'Usar versão do Google Drive' }), Dialog.cancelButton({ label: 'Cancelar' })
+  ] });
+  if (choice.button.label === 'Cancelar') return null;
+  if (!file.localPath || !association.target_file_id) throw new Error('A cópia local ou a cópia de destino não foi encontrada.');
+  const targetId = association.target_file_id;
+  if (choice.button.label === 'Usar versão do Jupyter') {
+    const remote = await downloadTargetNotebook(token, targetId);
+    await saveBackup(app, file.localPath, remote, 'drive');
+    const latest = await metadata(token, targetId);
+    if (changed(conflict.current, latest) || changed(latest, conflict.current)) throw new Error('O Google Drive mudou novamente durante a resolução; nenhuma versão foi sobrescrita.');
+    await uploadTargetContent(token, file.sourceFileId, targetId, conflict.localNotebook);
+    const updated = await metadata(token, targetId);
+    return serverPost('/google-classroom-teacher/api/association', { course_id: file.courseId, coursework_id: file.courseworkId, source_file_id: file.sourceFileId, target_file_id: targetId, target_file_name: updated.name, modified_time: updated.modifiedTime, version: updated.version, md5_checksum: updated.md5Checksum, can_edit: updated.canEdit });
+  }
+  await saveBackup(app, file.localPath, conflict.localNotebook, 'jupyter');
+  const remote = await downloadTargetNotebook(token, targetId);
+  const latest = await metadata(token, targetId);
+  if (changed(conflict.current, latest) || changed(latest, conflict.current)) throw new Error('O Google Drive mudou novamente durante a resolução; o notebook local não foi substituído.');
+  await replaceLocalNotebook(app, documentManager, file.localPath, remote);
+  return serverPost('/google-classroom-teacher/api/association', { course_id: file.courseId, coursework_id: file.courseworkId, source_file_id: file.sourceFileId, target_file_id: targetId, target_file_name: latest.name, modified_time: latest.modifiedTime, version: latest.version, md5_checksum: latest.md5Checksum, can_edit: latest.canEdit });
+}
+
+async function recreateMissingTarget(token: string, file: TeacherFile, association: TeacherAssociation, oldTargetId: string, notebook: any): Promise<TeacherAssociation | null> {
+  const choice = await showDialog({ title: 'Cópia de destino ausente', body: 'A cópia do professor foi apagada no Google Drive. Criar uma nova cópia com a versão local do Jupyter?', buttons: [Dialog.okButton({ label: 'Criar nova cópia' }), Dialog.cancelButton({ label: 'Cancelar' })] });
+  if (choice.button.label !== 'Criar nova cópia') return null;
+  if (!file.localPath) throw new Error('A cópia local deste notebook não foi encontrada; nenhuma cópia foi criada.');
+  // Reconfirma a ausência do alvo antigo antes de criar/persistir outro ID.
+  try { await metadata(token, oldTargetId); throw new Error('A cópia de destino voltou a existir; nenhuma nova cópia foi criada.'); }
+  catch (error) { if ((error as any).status !== 404) throw error; }
+  const copied = await copySourceFile(token, file.sourceFileId, association.target_file_name || association.source_file_name);
+  if (copied.id === file.sourceFileId || copied.id === oldTargetId) throw new Error('A nova cópia não gerou um destino distinto e seguro.');
+  await uploadTargetContent(token, file.sourceFileId, copied.id, notebook);
+  const current = await metadata(token, copied.id);
+  try { await metadata(token, oldTargetId); throw new Error('O destino anterior voltou a existir; o novo ID não foi persistido.'); }
+  catch (error) { if ((error as any).status !== 404) throw error; }
+  return serverPost('/google-classroom-teacher/api/association', {
+    course_id: file.courseId, coursework_id: file.courseworkId, source_file_id: file.sourceFileId,
+    target_file_id: copied.id, expected_target_file_id: oldTargetId, replace_missing_target: true,
+    target_file_name: current.name, modified_time: current.modifiedTime, version: current.version,
+    md5_checksum: current.md5Checksum, can_edit: current.canEdit
+  });
+}
+
 async function synchronize(app: JupyterFrontEnd, documentManager: IDocumentManager, token: string, file: TeacherFile): Promise<TeacherAssociation> {
   if (!file.localPath) throw new Error('Abra o notebook antes de sincronizar.');
   let association = await getAssociation(file);
   if (association.source_file_id === association.target_file_id) throw new Error('O arquivo original é somente leitura.');
+  try { await app.serviceManager.contents.get(file.localPath, { content: false }); }
+  catch (_) { throw new Error('A cópia local deste notebook não foi encontrada; nenhuma versão foi sobrescrita.'); }
   await saveTargetIfOpen(documentManager, file.localPath);
-  const contents = await app.serviceManager.contents.get(file.localPath, { content: true });
+  let contents: any;
+  try { contents = await app.serviceManager.contents.get(file.localPath, { content: true }); }
+  catch (_) { throw new Error('A cópia local deste notebook não foi encontrada; nenhuma versão foi sobrescrita.'); }
   const notebook = validateNotebook(contents.content);
   let targetId = association.target_file_id;
   let current: DriveMetadata;
@@ -334,13 +420,13 @@ async function synchronize(app: JupyterFrontEnd, documentManager: IDocumentManag
       version: current.version, md5_checksum: current.md5Checksum, can_edit: current.canEdit
     });
   } else {
-    current = await metadata(token, targetId);
-    if (changed({ modifiedTime: association.modified_time, version: association.version, md5Checksum: association.md5_checksum }, current)) {
-      throw new Error('O arquivo de destino no Drive foi alterado desde a última sincronização.');
-    }
+    try { current = await metadata(token, targetId); }
+    catch (error) { if ((error as any).status === 404) throw new MissingTargetError(targetId, notebook); throw error; }
+    if (changed({ modifiedTime: association.modified_time, version: association.version, md5Checksum: association.md5_checksum }, current)) throw new TargetConflictError(current, notebook);
   }
   if (!current.canEdit) throw new Error('A cópia de destino não pode ser editada.');
-  await uploadTargetContent(token, file.sourceFileId, targetId, notebook);
+  try { await uploadTargetContent(token, file.sourceFileId, targetId, notebook); }
+  catch (error) { if ((error as any).status === 404 && association.target_file_id) throw new MissingTargetError(association.target_file_id, notebook); throw error; }
   const updated = await metadata(token, targetId);
   association = await serverPost('/google-classroom-teacher/api/association', {
     course_id: file.courseId, coursework_id: file.courseworkId, source_file_id: file.sourceFileId,
@@ -429,7 +515,31 @@ class TeacherPanel extends Widget {
   private onToken(response: TeacherTokenResponse): void { if (!response.access_token) { this.error = 'Não foi possível obter autorização Google.'; this.render(); return; } accessToken = response.access_token; expiresAt = Date.now() + response.expires_in * 1000; void this.refresh(); }
   private async refresh(): Promise<void> { if (!accessToken) return; this.busy = true; this.error = null; this.render(); try { this.files = await collectFiles(accessToken); for (const file of this.files) { try { const a = await getAssociation(file); file.localPath = a.local_path; file.targetFileId = a.target_file_id; file.targetFileName = a.target_file_name; file.baseline = { modifiedTime: a.modified_time, version: a.version, md5Checksum: a.md5_checksum }; } catch (_) {} } this.info = 'Consulta ao Classroom concluída.'; } catch (e) { this.error = e instanceof Error ? e.message : 'Falha ao consultar o Classroom.'; } finally { this.busy = false; this.render(); } }
   private async open(file: TeacherFile): Promise<void> { if (!accessToken || !this.term) return; this.busy = true; this.render(); try { await openSource(this.app, accessToken, file, this.term); this.info = 'Arquivo original aberto como cópia local somente leitura na origem.'; } catch (e) { this.error = e instanceof Error ? e.message : 'Falha ao abrir o notebook.'; } finally { this.busy = false; this.render(); } }
-  private async sync(file: TeacherFile): Promise<void> { if (file.state === 'syncing' || !accessToken) return; file.state = 'syncing'; file.message = undefined; this.render(); try { const association = await synchronize(this.app, this.documentManager, accessToken, file); file.targetFileId = association.target_file_id; file.targetFileName = association.target_file_name; file.baseline = { modifiedTime: association.modified_time, version: association.version, md5Checksum: association.md5_checksum }; file.state = 'synced'; } catch (e) { file.state = e instanceof Error && e.message.includes('alterado') ? 'conflict' : 'error'; file.message = e instanceof Error ? e.message : 'Falha ao sincronizar.'; } finally { this.render(); } }
+  private async sync(file: TeacherFile): Promise<void> {
+    if (file.state === 'syncing' || !accessToken) return;
+    file.state = 'syncing'; file.message = undefined; this.render();
+    try {
+      let association: TeacherAssociation;
+      try { association = await synchronize(this.app, this.documentManager, accessToken, file); }
+      catch (error) {
+        if (error instanceof TargetConflictError) {
+          const current = await getAssociation(file);
+          const resolved = await resolveTargetConflict(this.app, this.documentManager, accessToken, file, current, error);
+          if (!resolved) { file.state = 'conflict'; file.message = 'Conflito não resolvido; nenhuma versão foi sobrescrita.'; return; }
+          association = resolved;
+        } else if (error instanceof MissingTargetError) {
+          const current = await getAssociation(file);
+          const recreated = await recreateMissingTarget(accessToken, file, current, error.targetId, error.localNotebook);
+          if (!recreated) { file.state = 'error'; file.message = 'Criação da nova cópia cancelada; nenhuma associação foi alterada.'; return; }
+          association = recreated;
+        } else throw error;
+      }
+      file.targetFileId = association.target_file_id; file.targetFileName = association.target_file_name;
+      file.baseline = { modifiedTime: association.modified_time, version: association.version, md5Checksum: association.md5_checksum };
+      file.state = 'synced';
+    } catch (error) { file.state = error instanceof TargetConflictError ? 'conflict' : 'error'; file.message = error instanceof Error ? error.message : 'Falha ao sincronizar.'; }
+    finally { this.render(); }
+  }
 }
 
 const plugin: JupyterFrontEndPlugin<void> = {

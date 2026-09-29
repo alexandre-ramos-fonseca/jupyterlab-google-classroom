@@ -12,7 +12,7 @@ from jupyter_server.base.handlers import JupyterHandler
 
 from .storage import MAX_BODY_BYTES, association_key, get_association, sanitize_course_section, save_notebook, update_association, validate_notebook
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 CLIENT_ENV = "GOOGLE_CLASSROOM_GOOGLE_CLIENT_ID"
 TERM_ENV = "GOOGLE_CLASSROOM_TEACHER_TERM"
 SCOPES = [
@@ -105,6 +105,8 @@ class AssociationHandler(BaseHandler):
             if "course_section" in body:
                 section = sanitize_course_section(body.get("course_section"), current["course_id"])
                 update["course_section"] = section
+            # O marcador só habilita o reset explícito após 404; storage exige o ID antigo
+            # esperado e continua rejeitando qualquer alteração não marcada/arbitrária.
             self.finish(update_association(_root(self), key, update, term=os.environ.get(TERM_ENV)))
         except (KeyError, ValueError, json.JSONDecodeError) as exc:
             raise tornado.web.HTTPError(400, reason=str(exc)) from exc
