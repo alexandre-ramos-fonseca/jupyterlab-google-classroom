@@ -32,7 +32,7 @@ See [`../../docs/google-cloud-setup.md`](../../docs/google-cloud-setup.md) for t
 3. Select a published `.ipynb` attachment.
 4. Open its local working copy.
 5. On the first synchronization, the extension creates a separate Drive copy.
-6. All later uploads target that copy.
+6. All later uploads target that copy. If the target was deleted, synchronization offers to create a replacement using the local notebook and keeps the same teacher naming convention.
 
 The source attachment published in Classroom is treated as read-only. The extension rejects uploads whose target would be the original file.
 
@@ -54,12 +54,14 @@ No client secret, refresh token, or token persistence is used.
 
 The implementation provides:
 
-- immutable target associations after the synchronization copy is created;
+- target associations cannot be changed arbitrarily; replacing a deleted target requires an explicit recovery flow after Drive returns 404;
 - explicit protection against uploading to the original Classroom attachment;
 - baseline-based conflict detection;
 - atomic local writes;
 - restrictive permissions for association metadata;
 - backups and restoration guards before destructive replacement.
+
+If the teacher copy and the local notebook both changed, a dialog offers **Usar versão do Jupyter**, **Usar versão do Google Drive**, or **Cancelar**. The discarded version is backed up locally, Drive is checked again before replacement, and the baseline is updated only after resolution. The Classroom `sourceFileId` remains read-only in all cases.
 
 The extension does not create, edit, delete, or submit Classroom coursework.
 

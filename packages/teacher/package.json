@@ -1,7 +1,7 @@
 {
   "name": "jupyterlab-google-classroom-teacher",
   "packageManager": "yarn@4.9.2",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Google Classroom — Professor para o JupyterLab Google Classroom",
   "license": "MIT",
   "files": [
